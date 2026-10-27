@@ -59,35 +59,56 @@ local function removeSurface(mp)
 	if sa then pcall(function() sa:Destroy() end) surfaces[mp] = nil end
 end
 
+local overlays = setmetatable({}, { __mode = "k" })   -- part -> Highlight we added
+
+local function removeOverlay(p)
+	local h = overlays[p]
+	if h then pcall(function() h:Destroy() end) overlays[p] = nil end
+end
+
 local function paintPart(inst)
 	if inst:IsA("BasePart") then
+		if inst.Transparency >= 1 then return end
 		save(inst, "Color", BLUE)
 		if inst:IsA("MeshPart") then
-			local ok, tex = pcall(function() return inst.TextureID end)
-			if ok and type(tex) == "string" and tex ~= "" then
-				local sa = surfaces[inst]
-				if not sa or not sa.Parent then
-					sa = Instance.new("SurfaceAppearance")
-					sa.Name = "BLSurface"
-					if pcall(function() sa.ColorMap = tex end) then
-						sa.Parent = inst
-						surfaces[inst] = sa
-					else
-						sa:Destroy()
-						sa = nil
-					end
-				end
-				if sa then pcall(function() sa.Color = BLUE_LIGHT end) end
+			-- solid blue skin (ignores the original texture so the blue always shows)
+			local sa = surfaces[inst]
+			if not sa or not sa.Parent then
+				sa = Instance.new("SurfaceAppearance")
+				sa.Name = "BLSurface"
+				sa.ColorMap = ""
+				sa.Parent = inst
+				surfaces[inst] = sa
 			end
+			pcall(function()
+				sa.ColorMap = ""
+				sa.Color = BLUE
+				sa.MetalnessMap = ""
+			end)
 		end
+		-- blue wash on top, so it shows even if the game ignores the skin change
+		local h = overlays[inst]
+		if not h or not h.Parent then
+			h = Instance.new("Highlight")
+			h.Name = "BLOverlay"
+			h.Adornee = inst
+			h.OutlineTransparency = 1
+			h.DepthMode = Enum.HighlightDepthMode.Occluded
+			h.Parent = inst
+			overlays[inst] = h
+		end
+		h.FillColor = BLUE
+		h.FillTransparency = 0.35
 	elseif inst:IsA("SpecialMesh") then
 		save(inst, "VertexColor", Vector3.new(BLUE.R, BLUE.G, BLUE.B))
+		pcall(function() inst.TextureId = "" end)
 	end
 end
 
 local function restoreTool(tool)
 	for _, d in ipairs(tool:GetDescendants()) do
 		if d:IsA("MeshPart") then removeSurface(d) end
+		if d:IsA("BasePart") then removeOverlay(d) end
 		local saved = originals[d]
 		if saved then
 			for prop, v in pairs(saved) do pcall(function() d[prop] = v end) end
@@ -126,6 +147,33 @@ local function hook(tool)
 	end)
 	refreshTool(tool)
 end
+
+-- keep re-applying (the game can rebuild / reset the weapon), and print tool names so we can see what's there
+local lastCheck, lastNames = 0, ""
+connect(game:GetService("RunService").Heartbeat, function()
+	local now = os.clock()
+	if now - lastCheck < 0.5 then return end
+	lastCheck = now
+	for tool, kind in pairs(hooked) do
+		if tool.Parent and wanted(kind) then
+			for _, d in ipairs(tool:GetDescendants()) do
+				if d:IsA("BasePart") and not overlays[d] then paintPart(d) end
+			end
+		end
+	end
+	local char = LocalPlayer.Character
+	if char then
+		local names = {}
+		for _, t in ipairs(char:GetChildren()) do
+			if t:IsA("Tool") then table.insert(names, t.Name) end
+		end
+		local joined = table.concat(names, ", ")
+		if joined ~= lastNames then
+			lastNames = joined
+			print("[Blue Luger & Corrupt] tools in hand: " .. (joined ~= "" and joined or "none"))
+		end
+	end
+end)
 
 local function scan(container)
 	if not container then return end
